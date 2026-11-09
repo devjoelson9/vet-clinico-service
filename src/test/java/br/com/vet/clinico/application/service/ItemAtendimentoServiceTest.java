@@ -53,6 +53,9 @@ class ItemAtendimentoServiceTest {
     @Mock
     private MedicamentoRepository medicamentoRepository;
 
+    @Mock
+    private ValorAtendimentoService valorAtendimentoService;
+
     private ItemAtendimentoService service;
 
     private final UsuarioAutenticado veterinario =
@@ -65,7 +68,8 @@ class ItemAtendimentoServiceTest {
                 atendimentoRepository,
                 catalogoItemRepository,
                 medicamentoRepository,
-                new ItemAtendimentoMapper()
+                new ItemAtendimentoMapper(),
+                valorAtendimentoService
         );
     }
 
@@ -95,6 +99,7 @@ class ItemAtendimentoServiceTest {
         assertThat(captor.getValue().getAtendimentoId()).isEqualTo(1L);
         verify(atendimentoRepository).findByIdAndDeletadoEmIsNull(1L);
         verify(atendimentoRepository, never()).save(any(Atendimento.class));
+        verify(valorAtendimentoService).recalcular(any(Atendimento.class));
     }
 
     @Test
@@ -116,6 +121,7 @@ class ItemAtendimentoServiceTest {
         assertThat(response.nomeItem()).isEqualTo("Dipirona");
         assertThat(response.valorUnitario()).isEqualByComparingTo("12.50");
         assertThat(response.valorTotal()).isEqualByComparingTo("37.50");
+        verify(valorAtendimentoService).recalcular(any(Atendimento.class));
     }
 
     @Test
@@ -235,6 +241,7 @@ class ItemAtendimentoServiceTest {
 
         assertThat(item.getDeletadoEm()).isNotNull();
         verify(repository).save(item);
+        verify(valorAtendimentoService).recalcular(any(Atendimento.class));
     }
 
     @Test
