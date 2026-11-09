@@ -25,6 +25,17 @@ public class JwtTokenProvider {
         return parseClaims(token).getSubject();
     }
 
+    public Long extractUserId(String token) {
+        Object usuarioId = parseClaims(token).get("usuarioId");
+        if (usuarioId instanceof Number number) {
+            return number.longValue();
+        }
+        if (usuarioId instanceof String texto && !texto.isBlank()) {
+            return Long.valueOf(texto);
+        }
+        return null;
+    }
+
     public Set<String> extractRoles(String token) {
         Object rolesClaim = parseClaims(token).get("roles");
         if (rolesClaim instanceof Collection<?> roles) {
