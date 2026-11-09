@@ -3,6 +3,7 @@ package br.com.vet.clinico.application.service;
 import br.com.vet.clinico.application.dto.request.AtualizarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.request.IniciarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.response.AtendimentoResponse;
+import br.com.vet.clinico.application.dto.response.HistoricoClinicoResponse;
 import br.com.vet.clinico.application.event.AtendimentoEventPublisher;
 import br.com.vet.clinico.application.exception.BusinessException;
 import br.com.vet.clinico.application.exception.ConflictException;
@@ -92,6 +93,37 @@ public class AtendimentoService {
     @Transactional(readOnly = true)
     public AtendimentoResponse buscarPorId(Long id) {
         return mapper.toResponse(buscarAtendimento(id));
+    }
+
+    @Transactional(readOnly = true)
+    public Page<HistoricoClinicoResponse> consultarHistorico(
+            Long animalId,
+            LocalDate inicio,
+            LocalDate fim,
+            Pageable pageable
+    ) {
+        if (animalId == null || animalId <= 0) {
+            throw new BusinessException("Animal inválido para consulta de histórico");
+        }
+
+        Specification<Atendimento> spec = (root, query, cb) -> cb.and(
+                cb.equal(root.get("animalId"), animalId),
+                cb.equal(root.get("status"), StatusAtendimento.FINALIZADO),
+                cb.isNull(root.get("deletadoEm"))
+        );
+
+        if (inicio != null) {
+            LocalDateTime inicioDateTime = inicio.atStartOfDay();
+            spec = spec.and((root, query, cb) ->
+                    cb.greaterThanOrEqualTo(root.get("finalizadoEm"), inicioDateTime));
+        }
+        if (fim != null) {
+            LocalDateTime fimDateTime = fim.plusDays(1).atStartOfDay();
+            spec = spec.and((root, query, cb) ->
+                    cb.lessThan(root.get("finalizadoEm"), fimDateTime));
+        }
+
+        return repository.findAll(spec, pageable).map(mapper::toHistoricoResponse);
     }
 
     @Transactional

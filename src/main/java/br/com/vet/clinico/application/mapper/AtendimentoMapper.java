@@ -3,6 +3,7 @@ package br.com.vet.clinico.application.mapper;
 import br.com.vet.clinico.application.dto.request.AtualizarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.request.IniciarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.response.AtendimentoResponse;
+import br.com.vet.clinico.application.dto.response.HistoricoClinicoResponse;
 import br.com.vet.clinico.domain.enums.StatusAtendimento;
 import br.com.vet.clinico.domain.model.Atendimento;
 import org.springframework.stereotype.Component;
@@ -61,6 +62,23 @@ public class AtendimentoMapper {
                 atendimento.getValorTotal(),
                 atendimento.getCriadoEm(),
                 atendimento.getAtualizadoEm()
+        );
+    }
+
+    public HistoricoClinicoResponse toHistoricoResponse(Atendimento atendimento) {
+        return new HistoricoClinicoResponse(
+                atendimento.getId(),
+                atendimento.getAgendamentoId(),
+                atendimento.getAnimalId(),
+                atendimento.getVeterinarioId(),
+                atendimento.getPesoKg(),
+                atendimento.getQueixaSintomas(),
+                atendimento.getDiagnostico(),
+                atendimento.getTratamento(),
+                atendimento.getObservacoes(),
+                atendimento.getOrientacoes(),
+                atendimento.getIniciadoEm(),
+                atendimento.getFinalizadoEm()
         );
     }
 
