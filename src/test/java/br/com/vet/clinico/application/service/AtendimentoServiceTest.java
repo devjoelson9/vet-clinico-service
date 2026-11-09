@@ -3,6 +3,7 @@ package br.com.vet.clinico.application.service;
 import br.com.vet.clinico.application.dto.request.AtualizarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.request.IniciarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.response.AtendimentoResponse;
+import br.com.vet.clinico.application.dto.response.HistoricoClinicoResponse;
 import br.com.vet.clinico.application.event.AtendimentoEventPublisher;
 import br.com.vet.clinico.application.exception.BusinessException;
 import br.com.vet.clinico.application.exception.ConflictException;
@@ -15,11 +16,25 @@ import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.access.AccessDeniedException;
 
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -28,6 +43,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -154,6 +173,127 @@ class AtendimentoServiceTest {
         assertThat(atendimento.getStatus()).isEqualTo(StatusAtendimento.CANCELADO);
         assertThat(atendimento.getDeletadoEm()).isNotNull();
         verify(eventPublisher).publicarCancelado(any(Atendimento.class));
+    }
+
+    @Test
+    void deveConsultarHistoricoMapeandoDadosClinicos() {
+        Pageable pageable = PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "finalizadoEm"));
+        Atendimento atendimento = atendimentoFinalizado();
+        when(repository.findAll(any(Specification.class), eq(pageable)))
+                .thenReturn(new PageImpl<>(List.of(atendimento), pageable, 1));
+
+        Page<HistoricoClinicoResponse> pagina = service.consultarHistorico(2L, null, null, pageable);
+
+        assertThat(pagina.getTotalElements()).isEqualTo(1);
+        assertThat(pagina.getContent()).hasSize(1);
+        HistoricoClinicoResponse response = pagina.getContent().get(0);
+        assertThat(response.atendimentoId()).isEqualTo(1L);
+        assertThat(response.agendamentoId()).isEqualTo(5L);
+        assertThat(response.animalId()).isEqualTo(2L);
+        assertThat(response.veterinarioId()).isEqualTo(10L);
+        assertThat(response.pesoKg()).isEqualByComparingTo("12.50");
+        assertThat(response.queixaSintomas()).isEqualTo("Apatia");
+        assertThat(response.diagnostico()).isEqualTo("Gastrite");
+        assertThat(response.tratamento()).isEqualTo("Medicação");
+        assertThat(response.observacoes()).isEqualTo("Animal estável");
+        assertThat(response.orientacoes()).isEqualTo("Retornar em 7 dias");
+        assertThat(response.iniciadoEm()).isNotNull();
+        assertThat(response.finalizadoEm()).isNotNull();
+    }
+
+    @Test
+    void deveRetornarPaginaVaziaQuandoAnimalNaoPossuiHistorico() {
+        Pageable pageable = PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "finalizadoEm"));
+        when(repository.findAll(any(Specification.class), eq(pageable))).thenReturn(Page.empty(pageable));
+
+        Page<HistoricoClinicoResponse> pagina = service.consultarHistorico(99L, null, null, pageable);
+
+        assertThat(pagina).isEmpty();
+        verify(repository).findAll(any(Specification.class), eq(pageable));
+    }
+
+    @Test
+    void deveRecusarConsultaDeHistoricoComAnimalIdInvalido() {
+        Pageable pageable = PageRequest.of(0, 10);
+
+        assertThatThrownBy(() -> service.consultarHistorico(null, null, null, pageable))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Animal inválido");
+        assertThatThrownBy(() -> service.consultarHistorico(0L, null, null, pageable))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Animal inválido");
+        assertThatThrownBy(() -> service.consultarHistorico(-1L, null, null, pageable))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Animal inválido");
+
+        verify(repository, never()).findAll(any(Specification.class), any(Pageable.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deveFiltrarHistoricoPorAnimalFinalizadoENaoDeletado() {
+        Pageable pageable = PageRequest.of(0, 10);
+        when(repository.findAll(any(Specification.class), eq(pageable))).thenReturn(Page.empty(pageable));
+
+        service.consultarHistorico(2L, null, null, pageable);
+
+        Specification<Atendimento> spec = capturarEspecificacao(pageable);
+        Root<Atendimento> root = mock(Root.class);
+        CriteriaQuery<?> query = mock(CriteriaQuery.class);
+        CriteriaBuilder cb = mock(CriteriaBuilder.class);
+        when(cb.and(any(Predicate[].class))).thenReturn(mock(Predicate.class));
+
+        spec.toPredicate(root, query, cb);
+
+        verify(root).get("animalId");
+        verify(root).get("status");
+        verify(root).get("deletadoEm");
+        verify(cb).equal(any(), eq(2L));
+        verify(cb).equal(any(), eq(StatusAtendimento.FINALIZADO));
+        verify(cb).isNull(any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deveFiltrarHistoricoPorPeriodoDeFinalizacao() {
+        Pageable pageable = PageRequest.of(0, 10);
+        when(repository.findAll(any(Specification.class), eq(pageable))).thenReturn(Page.empty(pageable));
+
+        LocalDate inicio = LocalDate.of(2026, 1, 1);
+        LocalDate fim = LocalDate.of(2026, 1, 31);
+        service.consultarHistorico(2L, inicio, fim, pageable);
+
+        Specification<Atendimento> spec = capturarEspecificacao(pageable);
+        Root<Atendimento> root = mock(Root.class);
+        CriteriaQuery<?> query = mock(CriteriaQuery.class);
+        CriteriaBuilder cb = mock(CriteriaBuilder.class);
+        when(cb.and(any(Predicate[].class))).thenReturn(mock(Predicate.class));
+        when(cb.greaterThanOrEqualTo(any(), any(LocalDateTime.class))).thenReturn(mock(Predicate.class));
+        when(cb.lessThan(any(), any(LocalDateTime.class))).thenReturn(mock(Predicate.class));
+
+        spec.toPredicate(root, query, cb);
+
+        verify(root, times(2)).get("finalizadoEm");
+        verify(cb).greaterThanOrEqualTo(any(), eq(inicio.atStartOfDay()));
+        verify(cb).lessThan(any(), eq(fim.plusDays(1).atStartOfDay()));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Specification<Atendimento> capturarEspecificacao(Pageable pageable) {
+        ArgumentCaptor<Specification<Atendimento>> captor = ArgumentCaptor.forClass(Specification.class);
+        verify(repository).findAll(captor.capture(), eq(pageable));
+        return captor.getValue();
+    }
+
+    private Atendimento atendimentoFinalizado() {
+        Atendimento atendimento = atendimentoEmAndamento();
+        atendimento.setStatus(StatusAtendimento.FINALIZADO);
+        atendimento.setIniciadoEm(LocalDateTime.of(2026, 1, 10, 9, 0));
+        atendimento.setFinalizadoEm(LocalDateTime.of(2026, 1, 10, 10, 0));
+        atendimento.setPesoKg(new BigDecimal("12.50"));
+        atendimento.setObservacoes("Animal estável");
+        atendimento.setOrientacoes("Retornar em 7 dias");
+        return atendimento;
     }
 
     private Atendimento atendimentoEmAndamento() {

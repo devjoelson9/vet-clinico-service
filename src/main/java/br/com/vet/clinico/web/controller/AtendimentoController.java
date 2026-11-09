@@ -3,6 +3,7 @@ package br.com.vet.clinico.web.controller;
 import br.com.vet.clinico.application.dto.request.AtualizarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.request.IniciarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.response.AtendimentoResponse;
+import br.com.vet.clinico.application.dto.response.HistoricoClinicoResponse;
 import br.com.vet.clinico.application.service.AtendimentoService;
 import br.com.vet.clinico.domain.enums.StatusAtendimento;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
@@ -55,6 +56,17 @@ public class AtendimentoController {
             @PageableDefault(size = 20, sort = "iniciadoEm", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         return ResponseEntity.ok(service.listar(animalId, veterinarioId, status, inicio, fim, pageable));
+    }
+
+    @GetMapping("/historico/{animalId}")
+    @PreAuthorize("hasAnyRole('VETERINARIO', 'RECEPCIONISTA', 'ADMIN')")
+    public ResponseEntity<Page<HistoricoClinicoResponse>> consultarHistorico(
+            @PathVariable Long animalId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate inicio,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fim,
+            @PageableDefault(size = 10, sort = "finalizadoEm", direction = Sort.Direction.DESC) Pageable pageable
+    ) {
+        return ResponseEntity.ok(service.consultarHistorico(animalId, inicio, fim, pageable));
     }
 
     @GetMapping("/{id}")
