@@ -5,8 +5,8 @@ import br.com.vet.clinico.application.dto.response.ItemAtendimentoResponse;
 import br.com.vet.clinico.application.exception.BusinessException;
 import br.com.vet.clinico.application.exception.ResourceNotFoundException;
 import br.com.vet.clinico.application.mapper.ItemAtendimentoMapper;
-import br.com.vet.clinico.domain.enums.StatusItem;
 import br.com.vet.clinico.domain.enums.StatusAtendimento;
+import br.com.vet.clinico.domain.enums.StatusItem;
 import br.com.vet.clinico.domain.enums.TipoItemAtendimento;
 import br.com.vet.clinico.domain.model.Atendimento;
 import br.com.vet.clinico.domain.model.CatalogoItem;
@@ -36,6 +36,7 @@ public class ItemAtendimentoService {
     private final CatalogoItemRepository catalogoItemRepository;
     private final MedicamentoRepository medicamentoRepository;
     private final ItemAtendimentoMapper mapper;
+    private final ValorAtendimentoService valorAtendimentoService;
 
     @Transactional
     public ItemAtendimentoResponse registrar(
@@ -43,7 +44,7 @@ public class ItemAtendimentoService {
             RegistrarItemAtendimentoRequest request,
             UsuarioAutenticado usuario
     ) {
-        buscarAtendimentoEmAndamento(atendimentoId, usuario);
+        Atendimento atendimento = buscarAtendimentoEmAndamento(atendimentoId, usuario);
 
         OrigemItem origem = resolverOrigem(request.tipo(), request.referenciaId());
         ItemAtendimento item = mapper.toEntity(
@@ -55,7 +56,9 @@ public class ItemAtendimentoService {
                 request.quantidade()
         );
 
-        return mapper.toResponse(repository.save(item));
+        ItemAtendimento salvo = repository.save(item);
+        valorAtendimentoService.recalcular(atendimento);
+        return mapper.toResponse(salvo);
     }
 
     @Transactional(readOnly = true)
@@ -72,13 +75,14 @@ public class ItemAtendimentoService {
 
     @Transactional
     public void excluir(Long atendimentoId, Long itemId, UsuarioAutenticado usuario) {
-        buscarAtendimentoEmAndamento(atendimentoId, usuario);
+        Atendimento atendimento = buscarAtendimentoEmAndamento(atendimentoId, usuario);
 
         ItemAtendimento item = repository.findByIdAndAtendimentoIdAndDeletadoEmIsNull(itemId, atendimentoId)
                 .orElseThrow(() -> new ResourceNotFoundException("Item do atendimento não encontrado: " + itemId));
 
         item.setDeletadoEm(LocalDateTime.now());
         repository.save(item);
+        valorAtendimentoService.recalcular(atendimento);
     }
 
     private Atendimento buscarAtendimentoEmAndamento(Long atendimentoId, UsuarioAutenticado usuario) {
