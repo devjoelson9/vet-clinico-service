@@ -59,13 +59,22 @@ class AtendimentoServiceTest {
     @Mock
     private AtendimentoEventPublisher eventPublisher;
 
+    @Mock
+    private ValorAtendimentoService valorAtendimentoService;
+
     private AtendimentoService service;
 
     private final UsuarioAutenticado veterinario = new UsuarioAutenticado(10L, "vet@teste.com", Set.of("VETERINARIO"));
 
     @BeforeEach
     void setUp() {
-        service = new AtendimentoService(repository, new AtendimentoMapper(), eventPublisher, List.of());
+        service = new AtendimentoService(
+                repository,
+                new AtendimentoMapper(),
+                eventPublisher,
+                List.of(),
+                valorAtendimentoService
+        );
     }
 
     @Test
@@ -73,7 +82,7 @@ class AtendimentoServiceTest {
         when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
         when(repository.save(any(Atendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        IniciarAtendimentoRequest request = new IniciarAtendimentoRequest(1L, 2L, new BigDecimal("12.50"));
+        IniciarAtendimentoRequest request = new IniciarAtendimentoRequest(1L, 2L, new BigDecimal("12.50"), null);
         AtendimentoResponse response = service.iniciar(request, veterinario);
 
         assertThat(response.agendamentoId()).isEqualTo(1L);
@@ -85,15 +94,36 @@ class AtendimentoServiceTest {
     }
 
     @Test
+    void deveAplicarServicoDoCatalogoAoIniciarAtendimento() {
+        when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
+        when(repository.save(any(Atendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(valorAtendimentoService.calcularTotal(any(Atendimento.class))).thenReturn(new BigDecimal("100.00"));
+
+        IniciarAtendimentoRequest request = new IniciarAtendimentoRequest(
+                1L, 2L, new BigDecimal("12.50"), 5L);
+
+        AtendimentoResponse response = service.iniciar(request, veterinario);
+
+        verify(valorAtendimentoService).aplicarServico(any(Atendimento.class), eq(5L));
+        assertThat(response.valorTotal()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
     void deveValidarAgendamentoAntesDeIniciar() {
         AtomicBoolean validado = new AtomicBoolean(false);
         AgendamentoGateway gateway = (agendamentoId, animalId, veterinarioId) -> validado.set(true);
-        service = new AtendimentoService(repository, new AtendimentoMapper(), eventPublisher, List.of(gateway));
+        service = new AtendimentoService(
+                repository,
+                new AtendimentoMapper(),
+                eventPublisher,
+                List.of(gateway),
+                valorAtendimentoService
+        );
 
         when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
         when(repository.save(any(Atendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null), veterinario);
+        service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null, null), veterinario);
 
         assertThat(validado).isTrue();
     }
@@ -102,7 +132,7 @@ class AtendimentoServiceTest {
     void deveRecusarInicioDuplicadoParaMesmoAgendamento() {
         when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(true);
 
-        assertThatThrownBy(() -> service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null), veterinario))
+        assertThatThrownBy(() -> service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null, null), veterinario))
                 .isInstanceOf(ConflictException.class);
     }
 
@@ -110,7 +140,7 @@ class AtendimentoServiceTest {
     void deveRecusarInicioSemIdentificacaoNoToken() {
         UsuarioAutenticado semId = new UsuarioAutenticado(null, "vet@teste.com", Set.of("VETERINARIO"));
 
-        assertThatThrownBy(() -> service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null), semId))
+        assertThatThrownBy(() -> service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null, null), semId))
                 .isInstanceOf(AccessDeniedException.class);
     }
 
@@ -119,12 +149,16 @@ class AtendimentoServiceTest {
         Atendimento atendimento = atendimentoEmAndamento();
         when(repository.findByIdAndDeletadoEmIsNull(1L)).thenReturn(Optional.of(atendimento));
         when(repository.save(any(Atendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(valorAtendimentoService.calcularTotal(any(Atendimento.class)))
+                .thenReturn(new BigDecimal("175.00"));
 
         AtendimentoResponse response = service.finalizar(1L, null, veterinario);
 
         assertThat(response.status()).isEqualTo(StatusAtendimento.FINALIZADO);
         assertThat(response.finalizadoEm()).isNotNull();
+        assertThat(response.valorTotal()).isEqualByComparingTo("175.00");
         verify(eventPublisher).publicarFinalizado(any(Atendimento.class));
+        verify(valorAtendimentoService).calcularTotal(atendimento);
     }
 
     @Test

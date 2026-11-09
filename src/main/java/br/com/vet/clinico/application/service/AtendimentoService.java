@@ -35,6 +35,7 @@ public class AtendimentoService {
     private final AtendimentoMapper mapper;
     private final AtendimentoEventPublisher eventPublisher;
     private final List<AgendamentoGateway> agendamentoGateways;
+    private final ValorAtendimentoService valorAtendimentoService;
 
     @Transactional
     public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAutenticado usuario) {
@@ -51,6 +52,9 @@ public class AtendimentoService {
                 gateway.validarInicioAtendimento(request.agendamentoId(), request.animalId(), veterinarioId));
 
         Atendimento atendimento = mapper.toEntity(request, veterinarioId);
+        valorAtendimentoService.aplicarServico(atendimento, request.servicoId());
+        atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
+
         Atendimento salvo = repository.save(atendimento);
         eventPublisher.publicarIniciado(salvo);
         return mapper.toResponse(salvo);
@@ -149,6 +153,7 @@ public class AtendimentoService {
 
         atendimento.setStatus(StatusAtendimento.FINALIZADO);
         atendimento.setFinalizadoEm(LocalDateTime.now());
+        atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
 
         Atendimento salvo = repository.save(atendimento);
         eventPublisher.publicarFinalizado(salvo);

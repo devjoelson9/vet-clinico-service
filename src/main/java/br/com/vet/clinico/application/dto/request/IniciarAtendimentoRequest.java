@@ -18,6 +18,9 @@ public record IniciarAtendimentoRequest(
 
         @DecimalMin(value = "0.01", message = "Peso deve ser maior que zero")
         @Digits(integer = 3, fraction = 2, message = "Peso deve ter no máximo 3 dígitos inteiros e 2 decimais")
-        BigDecimal pesoKg
+        BigDecimal pesoKg,
+
+        @Positive(message = "Serviço inválido")
+        Long servicoId
 ) {
 }
