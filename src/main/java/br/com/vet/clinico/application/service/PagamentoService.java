@@ -5,6 +5,8 @@ import br.com.vet.clinico.application.dto.request.RegistrarPagamentoRequest;
 import br.com.vet.clinico.application.dto.response.PagamentoResponse;
 import br.com.vet.clinico.application.exception.BusinessException;
 import br.com.vet.clinico.application.exception.ResourceNotFoundException;
+import br.com.vet.clinico.application.gateway.AgendamentoGateway;
+import br.com.vet.clinico.domain.enums.StatusAtendimento;
 import br.com.vet.clinico.domain.enums.StatusPagamento;
 import br.com.vet.clinico.domain.model.Atendimento;
 import br.com.vet.clinico.domain.model.Pagamento;
@@ -26,6 +28,7 @@ public class PagamentoService {
 
     private final PagamentoRepository pagamentoRepository;
     private final AtendimentoRepository atendimentoRepository;
+    private final List<AgendamentoGateway> agendamentoGateways;
 
     @Transactional
     public PagamentoResponse registrar(
@@ -42,15 +45,8 @@ public class PagamentoService {
             );
         }
 
-        BigDecimal pagos = somar(
-                atendimentoId,
-                StatusPagamento.PAGO
-        );
-
-        BigDecimal pendentes = somar(
-                atendimentoId,
-                StatusPagamento.PENDENTE
-        );
+        BigDecimal pagos = somar(atendimentoId, StatusPagamento.PAGO);
+        BigDecimal pendentes = somar(atendimentoId, StatusPagamento.PENDENTE);
 
         BigDecimal disponivel = valorTotal
                 .subtract(pagos)
@@ -119,7 +115,46 @@ public class PagamentoService {
 
         Pagamento salvo = pagamentoRepository.save(pagamento);
 
+        // Verifica se este pagamento quitou o atendimento.
+        concluirAgendamentoSeQuitado(atendimentoId);
+
         return toResponse(salvo);
+    }
+
+    @Transactional
+    public void concluirAgendamentoSeQuitado(Long atendimentoId) {
+        Atendimento atendimento = buscarAtendimento(atendimentoId);
+
+        // A finalização clínica é obrigatória.
+        if (atendimento.getStatus() != StatusAtendimento.FINALIZADO) {
+            return;
+        }
+
+        // O atendimento precisa estar vinculado a um agendamento.
+        if (atendimento.getAgendamentoId() == null) {
+            return;
+        }
+
+        BigDecimal valorTotal = atendimento.getValorTotal();
+
+        if (valorTotal == null || valorTotal.compareTo(ZERO) <= 0) {
+            return;
+        }
+
+        BigDecimal totalPago = somar(
+                atendimentoId,
+                StatusPagamento.PAGO
+        );
+
+        // Só conclui quando o valor total estiver quitado.
+        if (totalPago.compareTo(valorTotal) >= 0) {
+            agendamentoGateways.forEach(gateway ->
+                    gateway.alterarStatus(
+                            atendimento.getAgendamentoId(),
+                            "CONCLUIDO"
+                    )
+            );
+        }
     }
 
     private BigDecimal somar(
