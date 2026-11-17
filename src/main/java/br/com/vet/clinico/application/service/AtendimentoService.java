@@ -26,6 +26,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
+
 @Service
 @RequiredArgsConstructor
 public class AtendimentoService {
@@ -35,40 +36,29 @@ public class AtendimentoService {
     private final AtendimentoEventPublisher eventPublisher;
     private final List<AgendamentoGateway> agendamentoGateways;
     private final ValorAtendimentoService valorAtendimentoService;
-    private final PagamentoService pagamentoService;
 
-   
-@Transactional
-public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAutenticado usuario) {
-    Long veterinarioId = usuario.id();
+    @Transactional
+    public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAutenticado usuario) {
+        Long veterinarioId = usuario.id();
+        if (veterinarioId == null) {
+            throw new AccessDeniedException("Token sem identificação do usuário");
+        }
 
-    if (veterinarioId == null) {
-        throw new AccessDeniedException("Token sem identificação do usuário");
+        if (repository.existsByAgendamentoIdAndDeletadoEmIsNull(request.agendamentoId())) {
+            throw new ConflictException("Já existe um atendimento ativo para o agendamento informado");
+        }
+
+        agendamentoGateways.forEach(gateway ->
+                gateway.validarInicioAtendimento(request.agendamentoId(), request.animalId(), veterinarioId));
+
+        Atendimento atendimento = mapper.toEntity(request, veterinarioId);
+        valorAtendimentoService.aplicarServico(atendimento, request.servicoId());
+        atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
+
+        Atendimento salvo = repository.save(atendimento);
+        eventPublisher.publicarIniciado(salvo);
+        return mapper.toResponse(salvo);
     }
-
-    if (repository.existsByAgendamentoIdAndDeletadoEmIsNull(request.agendamentoId())) {
-        throw new ConflictException("Já existe um atendimento ativo para o agendamento informado");
-    }
-
-    agendamentoGateways.forEach(gateway ->
-            gateway.validarInicioAtendimento(
-                    request.agendamentoId(),
-                    request.animalId(),
-                    veterinarioId
-            )
-    );
-
-    Atendimento atendimento = mapper.toEntity(request, veterinarioId);
-    valorAtendimentoService.aplicarServico(atendimento, request.servicoId());
-    atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
-
-    Atendimento salvo = repository.save(atendimento);
-
-    eventPublisher.publicarIniciado(salvo);
-
-    return mapper.toResponse(salvo);
-}
-
 
     @Transactional(readOnly = true)
     public Page<AtendimentoResponse> listar(
@@ -78,7 +68,6 @@ public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAut
             LocalDate inicio,
             LocalDate fim,
             Pageable pageable
-            
     ) {
         Specification<Atendimento> spec = (root, query, cb) -> cb.isNull(root.get("deletadoEm"));
 
@@ -151,41 +140,25 @@ public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAut
         return mapper.toResponse(repository.save(atendimento));
     }
 
-   
-@Transactional
-public AtendimentoResponse finalizar(Long id, AtualizarAtendimentoRequest request, UsuarioAutenticado usuario) {
-    Atendimento atendimento = buscarAtendimento(id);
-    validarEmAndamento(atendimento);
-    validarResponsavel(atendimento, usuario);
+    @Transactional
+    public AtendimentoResponse finalizar(Long id, AtualizarAtendimentoRequest request, UsuarioAutenticado usuario) {
+        Atendimento atendimento = buscarAtendimento(id);
+        validarEmAndamento(atendimento);
+        validarResponsavel(atendimento, usuario);
 
-    if (request != null) {
-        mapper.updateEntity(atendimento, request);
+        if (request != null) {
+            mapper.updateEntity(atendimento, request);
+        }
+        validarCamposObrigatorios(atendimento);
+
+        atendimento.setStatus(StatusAtendimento.FINALIZADO);
+        atendimento.setFinalizadoEm(LocalDateTime.now());
+        atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
+
+        Atendimento salvo = repository.save(atendimento);
+        eventPublisher.publicarFinalizado(salvo);
+        return mapper.toResponse(salvo);
     }
-
-    validarCamposObrigatorios(atendimento);
-
-    atendimento.setStatus(StatusAtendimento.FINALIZADO);
-    atendimento.setFinalizadoEm(LocalDateTime.now());
-    atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
-
-    Atendimento salvo = repository.save(atendimento);
-
-    eventPublisher.publicarFinalizado(salvo);
-
-    if (salvo.getAgendamentoId() != null) {
-        agendamentoGateways.forEach(gateway ->
-                gateway.alterarStatus(
-                        salvo.getAgendamentoId(),
-                        "ATENDIMENTO_REALIZADO"
-                )
-        );
-    }
-
-    pagamentoService.concluirAgendamentoSeQuitado(salvo.getId());
-
-    return mapper.toResponse(salvo);
-}
-
 
     @Transactional
     public void cancelar(Long id, UsuarioAutenticado usuario) {

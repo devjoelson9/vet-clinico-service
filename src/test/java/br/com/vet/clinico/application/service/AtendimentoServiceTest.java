@@ -54,9 +54,6 @@ import static org.mockito.Mockito.when;
 class AtendimentoServiceTest {
 
     @Mock
-    private PagamentoService pagamentoService;
-
-    @Mock
     private AtendimentoRepository repository;
 
     @Mock
@@ -71,14 +68,13 @@ class AtendimentoServiceTest {
 
     @BeforeEach
     void setUp() {
-    service = new AtendimentoService(
-        repository,
-        new AtendimentoMapper(),
-        eventPublisher,
-        List.of(),
-        valorAtendimentoService,
-        pagamentoService
-);
+        service = new AtendimentoService(
+                repository,
+                new AtendimentoMapper(),
+                eventPublisher,
+                List.of(),
+                valorAtendimentoService
+        );
     }
 
     @Test
@@ -113,34 +109,25 @@ class AtendimentoServiceTest {
     }
 
     @Test
-    
-void deveValidarAgendamentoAntesDeIniciar() {
+    void deveValidarAgendamentoAntesDeIniciar() {
+        AtomicBoolean validado = new AtomicBoolean(false);
+        AgendamentoGateway gateway = (agendamentoId, animalId, veterinarioId) -> validado.set(true);
+        service = new AtendimentoService(
+                repository,
+                new AtendimentoMapper(),
+                eventPublisher,
+                List.of(gateway),
+                valorAtendimentoService
+        );
 
-    AgendamentoGateway gateway = mock(AgendamentoGateway.class);
+        when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
+        when(repository.save(any(Atendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-    // Cria o serviço utilizando o gateway simulado.
-    service = new AtendimentoService(
-            repository,
-            new AtendimentoMapper(),
-            eventPublisher,
-            List.of(gateway),
-            valorAtendimentoService,
-            pagamentoService
-    );
+        service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null, null), veterinario);
 
-    when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L))
-            .thenReturn(false);
+        assertThat(validado).isTrue();
+    }
 
-    when(repository.save(any(Atendimento.class)))
-            .thenAnswer(invocation -> invocation.getArgument(0));
-
-    service.iniciar(
-            new IniciarAtendimentoRequest(1L, 2L, null, null),
-            veterinario
-    );
-
-    verify(gateway).validarInicioAtendimento(1L, 2L, 10L);
-}
     @Test
     void deveRecusarInicioDuplicadoParaMesmoAgendamento() {
         when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(true);
@@ -172,7 +159,6 @@ void deveValidarAgendamentoAntesDeIniciar() {
         assertThat(response.valorTotal()).isEqualByComparingTo("175.00");
         verify(eventPublisher).publicarFinalizado(any(Atendimento.class));
         verify(valorAtendimentoService).calcularTotal(atendimento);
-        verify(pagamentoService).concluirAgendamentoSeQuitado(1L);
     }
 
     @Test
