@@ -13,6 +13,7 @@ import br.com.vet.clinico.application.mapper.AtendimentoMapper;
 import br.com.vet.clinico.domain.enums.StatusAtendimento;
 import br.com.vet.clinico.domain.model.Atendimento;
 import br.com.vet.clinico.domain.repository.AtendimentoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -35,14 +36,12 @@ public class AtendimentoService {
     private final AtendimentoMapper mapper;
     private final AtendimentoEventPublisher eventPublisher;
     private final List<AgendamentoGateway> agendamentoGateways;
+    private final IdentidadeClient identidadeClient;
     private final ValorAtendimentoService valorAtendimentoService;
 
     @Transactional
     public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAutenticado usuario) {
-        Long veterinarioId = usuario.id();
-        if (veterinarioId == null) {
-            throw new AccessDeniedException("Token sem identificação do usuário");
-        }
+        Long veterinarioId = resolverVeterinarioId(usuario);
 
         if (repository.existsByAgendamentoIdAndDeletadoEmIsNull(request.agendamentoId())) {
             throw new ConflictException("Já existe um atendimento ativo para o agendamento informado");
@@ -130,6 +129,25 @@ public class AtendimentoService {
         return repository.findAll(spec, pageable).map(mapper::toHistoricoResponse);
     }
 
+    /**
+     * Histórico visível ao tutor. A posse do animal é validada no serviço de
+     * identidade antes de qualquer dado clínico ser retornado.
+     */
+    @Transactional(readOnly = true)
+    public Page<HistoricoClinicoResponse> consultarHistoricoTutor(Long animalId, Pageable pageable) {
+        if (animalId == null || animalId <= 0) {
+            throw new BusinessException("Animal inválido para consulta de histórico");
+        }
+
+        identidadeClient.validarAnimalDoTutor(animalId);
+
+        return repository.findByAnimalIdAndStatusAndDeletadoEmIsNull(
+                animalId,
+                StatusAtendimento.FINALIZADO,
+                pageable
+        ).map(mapper::toHistoricoResponse);
+    }
+
     @Transactional
     public AtendimentoResponse atualizar(Long id, AtualizarAtendimentoRequest request, UsuarioAutenticado usuario) {
         Atendimento atendimento = buscarAtendimento(id);
@@ -185,9 +203,26 @@ public class AtendimentoService {
     }
 
     private void validarResponsavel(Atendimento atendimento, UsuarioAutenticado usuario) {
-        if (!usuario.isAdmin() && !Objects.equals(atendimento.getVeterinarioId(), usuario.id())) {
+        if (!usuario.isAdmin() && !Objects.equals(atendimento.getVeterinarioId(), resolverVeterinarioId(usuario))) {
             throw new AccessDeniedException("Apenas o veterinário responsável pode alterar este atendimento");
         }
+    }
+
+    /**
+     * O JWT carrega o id do usuário, mas o agendamento e o atendimento usam o
+     * id do registro de veterinário. Resolvemos essa diferença no serviço de
+     * identidade. Administradores não possuem cadastro de veterinário.
+     */
+    private Long resolverVeterinarioId(UsuarioAutenticado usuario) {
+        if (usuario.id() == null) {
+            throw new AccessDeniedException("Token sem identificação do usuário");
+        }
+        if (usuario.isAdmin()) {
+            return usuario.id();
+        }
+        return identidadeClient.buscarVeterinarioId(usuario.id())
+                .orElseThrow(() -> new BusinessException(
+                        "Veterinário não encontrado para o usuário autenticado"));
     }
 
     private void validarCamposObrigatorios(Atendimento atendimento) {

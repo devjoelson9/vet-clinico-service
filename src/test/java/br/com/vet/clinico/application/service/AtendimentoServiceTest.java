@@ -12,6 +12,7 @@ import br.com.vet.clinico.application.mapper.AtendimentoMapper;
 import br.com.vet.clinico.domain.enums.StatusAtendimento;
 import br.com.vet.clinico.domain.model.Atendimento;
 import br.com.vet.clinico.domain.repository.AtendimentoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +45,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -62,17 +64,24 @@ class AtendimentoServiceTest {
     @Mock
     private ValorAtendimentoService valorAtendimentoService;
 
+    @Mock
+    private IdentidadeClient identidadeClient;
+
     private AtendimentoService service;
 
     private final UsuarioAutenticado veterinario = new UsuarioAutenticado(10L, "vet@teste.com", Set.of("VETERINARIO"));
 
     @BeforeEach
     void setUp() {
+        lenient().when(identidadeClient.buscarVeterinarioId(10L)).thenReturn(Optional.of(10L));
+        lenient().when(identidadeClient.buscarVeterinarioId(99L)).thenReturn(Optional.of(99L));
+
         service = new AtendimentoService(
                 repository,
                 new AtendimentoMapper(),
                 eventPublisher,
                 List.of(),
+                identidadeClient,
                 valorAtendimentoService
         );
     }
@@ -117,6 +126,7 @@ class AtendimentoServiceTest {
                 new AtendimentoMapper(),
                 eventPublisher,
                 List.of(gateway),
+                identidadeClient,
                 valorAtendimentoService
         );
 

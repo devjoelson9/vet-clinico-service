@@ -33,3 +33,6 @@ build/
 .vscode/
 
 .env
+# Anotacoes locais (nao versionar)
+/instucoes.md
+/requisitos_completo.md

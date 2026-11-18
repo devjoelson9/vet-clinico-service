@@ -19,6 +19,7 @@ import br.com.vet.clinico.domain.repository.AtendimentoRepository;
 import br.com.vet.clinico.domain.repository.ItemPrescricaoRepository;
 import br.com.vet.clinico.domain.repository.MedicamentoRepository;
 import br.com.vet.clinico.domain.repository.PrescricaoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.pdf.PrescricaoPdfGenerator;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +41,7 @@ public class PrescricaoService {
     private final MedicamentoRepository medicamentoRepository;
     private final PrescricaoMapper mapper;
     private final PrescricaoPdfGenerator pdfGenerator;
+    private final IdentidadeClient identidadeClient;
 
     @Transactional
     public PrescricaoResponse registrar(
@@ -132,6 +134,28 @@ public class PrescricaoService {
         return pdfGenerator.gerar(atendimento, prescricao, buscarItens(prescricao.getId()));
     }
 
+    /**
+     * Consulta da prescrição pelo tutor. O vínculo animal/tutor é validado no
+     * serviço de identidade; o tutor só vê prescrições dos próprios animais.
+     */
+    @Transactional(readOnly = true)
+    public PrescricaoResponse consultarParaTutor(Long atendimentoId) {
+        Atendimento atendimento = validarAtendimentoExiste(atendimentoId);
+        identidadeClient.validarAnimalDoTutor(atendimento.getAnimalId());
+
+        Prescricao prescricao = buscarPrescricaoAtiva(atendimentoId);
+        return mapper.toResponse(prescricao, buscarItens(prescricao.getId()));
+    }
+
+    @Transactional(readOnly = true)
+    public byte[] gerarPdfParaTutor(Long atendimentoId) {
+        Atendimento atendimento = validarAtendimentoExiste(atendimentoId);
+        identidadeClient.validarAnimalDoTutor(atendimento.getAnimalId());
+
+        Prescricao prescricao = buscarPrescricaoAtiva(atendimentoId);
+        return pdfGenerator.gerar(atendimento, prescricao, buscarItens(prescricao.getId()));
+    }
+
     private ItemPrescricao criarItem(Long prescricaoId, ItemPrescricaoRequest request) {
         Medicamento medicamento = medicamentoRepository
                 .findByIdAndDeletadoEmIsNull(request.medicamentoId())
@@ -162,13 +186,22 @@ public class PrescricaoService {
                         "Atendimento não encontrado: " + atendimentoId));
     }
 
+    private Long veterinarioIdAtual(UsuarioAutenticado usuario) {
+        if (usuario.id() == null) {
+            throw new AccessDeniedException("Token sem identificação do usuário");
+        }
+        return identidadeClient.buscarVeterinarioId(usuario.id())
+                .orElseThrow(() -> new BusinessException(
+                        "Veterinário não encontrado para o usuário autenticado"));
+    }
+
     private Atendimento buscarAtendimentoEmAndamento(Long atendimentoId, UsuarioAutenticado usuario) {
         Atendimento atendimento = validarAtendimentoExiste(atendimentoId);
 
         if (atendimento.getStatus() != StatusAtendimento.EM_ANDAMENTO) {
             throw new BusinessException("Atendimento não está em andamento");
         }
-        if (!usuario.isAdmin() && !Objects.equals(atendimento.getVeterinarioId(), usuario.id())) {
+        if (!usuario.isAdmin() && !Objects.equals(atendimento.getVeterinarioId(), veterinarioIdAtual(usuario))) {
             throw new AccessDeniedException("Apenas o veterinário responsável pode alterar este atendimento");
         }
 
