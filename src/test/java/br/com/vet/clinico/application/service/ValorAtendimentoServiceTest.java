@@ -13,6 +13,7 @@ import br.com.vet.clinico.domain.model.ItemAtendimento;
 import br.com.vet.clinico.domain.repository.AtendimentoRepository;
 import br.com.vet.clinico.domain.repository.CatalogoItemRepository;
 import br.com.vet.clinico.domain.repository.ItemAtendimentoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -46,6 +48,9 @@ class ValorAtendimentoServiceTest {
     @Mock
     private CatalogoItemRepository catalogoItemRepository;
 
+    @Mock
+    private IdentidadeClient identidadeClient;
+
     private ValorAtendimentoService service;
 
     private final UsuarioAutenticado veterinario =
@@ -53,10 +58,14 @@ class ValorAtendimentoServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(identidadeClient.buscarVeterinarioId(10L)).thenReturn(Optional.of(10L));
+        lenient().when(identidadeClient.buscarVeterinarioId(99L)).thenReturn(Optional.of(99L));
+
         service = new ValorAtendimentoService(
                 atendimentoRepository,
                 itemAtendimentoRepository,
-                catalogoItemRepository
+                catalogoItemRepository,
+                identidadeClient
         );
     }
 
@@ -141,6 +150,28 @@ class ValorAtendimentoServiceTest {
         assertThat(response.valorBase()).isEqualByComparingTo("120.00");
         assertThat(response.valorTotal()).isEqualByComparingTo("120.00");
         verify(atendimentoRepository).save(atendimento);
+    }
+
+    @Test
+    void deveDefinirValorBaseQuandoIdDoUsuarioDifereDoIdDoVeterinario() {
+        Atendimento atendimento = atendimentoEmAndamento();
+        atendimento.setVeterinarioId(3L);
+
+        when(atendimentoRepository.findByIdAndDeletadoEmIsNull(1L)).thenReturn(Optional.of(atendimento));
+        when(identidadeClient.buscarVeterinarioId(10L)).thenReturn(Optional.of(3L));
+        when(catalogoItemRepository.findByIdAndDeletadoEmIsNull(5L))
+                .thenReturn(Optional.of(servicoAtivo(new BigDecimal("120.00"))));
+        when(itemAtendimentoRepository.findByAtendimentoIdAndDeletadoEmIsNullOrderByCriadoEmAsc(1L))
+                .thenReturn(List.of());
+        when(atendimentoRepository.save(any(Atendimento.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ValorAtendimentoResponse response = service.definirValorBase(
+                1L, new DefinirValorBaseRequest(5L), veterinario);
+
+        assertThat(response.valorBase()).isEqualByComparingTo("120.00");
+        assertThat(response.valorTotal()).isEqualByComparingTo("120.00");
+        verify(identidadeClient).buscarVeterinarioId(10L);
     }
 
     @Test

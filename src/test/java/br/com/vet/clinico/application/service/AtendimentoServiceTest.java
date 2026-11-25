@@ -40,11 +40,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -120,7 +122,11 @@ class AtendimentoServiceTest {
     @Test
     void deveValidarAgendamentoAntesDeIniciar() {
         AtomicBoolean validado = new AtomicBoolean(false);
-        AgendamentoGateway gateway = (agendamentoId, animalId, veterinarioId) -> validado.set(true);
+        AgendamentoGateway gateway = (agendamentoId, animalId, veterinarioId) -> {
+            assertThat(veterinarioId).isEqualTo(10L);
+            validado.set(true);
+            return 10L;
+        };
         service = new AtendimentoService(
                 repository,
                 new AtendimentoMapper(),
@@ -136,6 +142,35 @@ class AtendimentoServiceTest {
         service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null, null), veterinario);
 
         assertThat(validado).isTrue();
+    }
+
+    @Test
+    void deveIniciarAtendimentoComoAdminUsandoVeterinarioDoAgendamento() {
+        AtomicReference<Long> veterinarioEsperado = new AtomicReference<>(999L);
+        AgendamentoGateway gateway = (agendamentoId, animalId, veterinarioId) -> {
+            veterinarioEsperado.set(veterinarioId);
+            return 7L;
+        };
+        service = new AtendimentoService(
+                repository,
+                new AtendimentoMapper(),
+                eventPublisher,
+                List.of(gateway),
+                identidadeClient,
+                valorAtendimentoService
+        );
+
+        when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
+        when(repository.save(any(Atendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        UsuarioAutenticado admin = new UsuarioAutenticado(1L, "admin@teste.com", Set.of("ADMIN"));
+        AtendimentoResponse response = service.iniciar(
+                new IniciarAtendimentoRequest(1L, 2L, null, null), admin);
+
+        assertThat(response.veterinarioId()).isEqualTo(7L);
+        assertThat(veterinarioEsperado.get()).isNull();
+        verify(identidadeClient, never()).buscarVeterinarioId(any());
+        verify(eventPublisher).publicarIniciado(any(Atendimento.class));
     }
 
     @Test
@@ -271,6 +306,48 @@ class AtendimentoServiceTest {
                 .hasMessageContaining("Animal inválido");
 
         verify(repository, never()).findAll(any(Specification.class), any(Pageable.class));
+    }
+
+    @Test
+    void deveValidarVinculoDoAnimalComTutorAoConsultarHistoricoDoTutor() {
+        Pageable pageable = PageRequest.of(0, 10);
+        Atendimento atendimento = atendimentoFinalizado();
+        when(repository.findByAnimalIdAndStatusAndDeletadoEmIsNull(
+                2L, StatusAtendimento.FINALIZADO, pageable))
+                .thenReturn(new PageImpl<>(List.of(atendimento), pageable, 1));
+
+        Page<HistoricoClinicoResponse> pagina = service.consultarHistoricoTutor(2L, pageable);
+
+        verify(identidadeClient).validarAnimalDoTutor(2L);
+        assertThat(pagina.getTotalElements()).isEqualTo(1);
+        assertThat(pagina.getContent().get(0).animalId()).isEqualTo(2L);
+    }
+
+    @Test
+    void devePropagarAcessoNegadoQuandoAnimalNaoPertenceAoTutor() {
+        Pageable pageable = PageRequest.of(0, 10);
+        doThrow(new AccessDeniedException("Animal não pertence ao tutor autenticado"))
+                .when(identidadeClient).validarAnimalDoTutor(2L);
+
+        assertThatThrownBy(() -> service.consultarHistoricoTutor(2L, pageable))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("não pertence ao tutor");
+
+        verify(repository, never())
+                .findByAnimalIdAndStatusAndDeletadoEmIsNull(any(), any(), any());
+    }
+
+    @Test
+    void deveRecusarHistoricoDoTutorComAnimalIdInvalidoSemChamarIdentidade() {
+        Pageable pageable = PageRequest.of(0, 10);
+
+        assertThatThrownBy(() -> service.consultarHistoricoTutor(0L, pageable))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Animal inválido");
+
+        verify(identidadeClient, never()).validarAnimalDoTutor(any());
+        verify(repository, never())
+                .findByAnimalIdAndStatusAndDeletadoEmIsNull(any(), any(), any());
     }
 
     @Test
