@@ -29,7 +29,7 @@ public class AgendamentoClient implements AgendamentoGateway {
     }
 
     @Override
-    public void validarInicioAtendimento(Long agendamentoId, Long animalId, Long veterinarioId) {
+    public Long validarInicioAtendimento(Long agendamentoId, Long animalId, Long veterinarioEsperado) {
         AgendamentoInfo agendamento = buscar(agendamentoId);
 
         if (!"AGUARDANDO_ATENDIMENTO".equals(agendamento.status())) {
@@ -40,9 +40,13 @@ public class AgendamentoClient implements AgendamentoGateway {
         if (!Objects.equals(agendamento.animalId(), animalId)) {
             throw new BusinessException("O animal informado não pertence ao agendamento");
         }
-        if (!Objects.equals(agendamento.veterinarioId(), veterinarioId)) {
+        if (agendamento.veterinarioId() == null) {
+            throw new BusinessException("O agendamento não possui veterinário responsável");
+        }
+        if (veterinarioEsperado != null && !Objects.equals(agendamento.veterinarioId(), veterinarioEsperado)) {
             throw new AccessDeniedException("O agendamento pertence a outro veterinário");
         }
+        return agendamento.veterinarioId();
     }
 
     private AgendamentoInfo buscar(Long agendamentoId) {

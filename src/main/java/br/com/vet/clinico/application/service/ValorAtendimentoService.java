@@ -13,6 +13,7 @@ import br.com.vet.clinico.domain.model.ItemAtendimento;
 import br.com.vet.clinico.domain.repository.AtendimentoRepository;
 import br.com.vet.clinico.domain.repository.CatalogoItemRepository;
 import br.com.vet.clinico.domain.repository.ItemAtendimentoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.AccessDeniedException;
@@ -33,6 +34,7 @@ public class ValorAtendimentoService {
     private final AtendimentoRepository atendimentoRepository;
     private final ItemAtendimentoRepository itemAtendimentoRepository;
     private final CatalogoItemRepository catalogoItemRepository;
+    private final IdentidadeClient identidadeClient;
 
     @Transactional(readOnly = true)
     public ValorAtendimentoResponse consultar(Long atendimentoId) {
@@ -141,10 +143,19 @@ public class ValorAtendimentoService {
         if (atendimento.getStatus() != StatusAtendimento.EM_ANDAMENTO) {
             throw new BusinessException("Atendimento não está em andamento");
         }
-        if (!usuario.isAdmin() && !Objects.equals(atendimento.getVeterinarioId(), usuario.id())) {
+        if (!usuario.isAdmin() && !Objects.equals(atendimento.getVeterinarioId(), veterinarioIdAtual(usuario))) {
             throw new AccessDeniedException("Apenas o veterinário responsável pode alterar este atendimento");
         }
 
         return atendimento;
+    }
+
+    private Long veterinarioIdAtual(UsuarioAutenticado usuario) {
+        if (usuario.id() == null) {
+            throw new AccessDeniedException("Token sem identificação do usuário");
+        }
+        return identidadeClient.buscarVeterinarioId(usuario.id())
+                .orElseThrow(() -> new BusinessException(
+                        "Veterinário não encontrado para o usuário autenticado"));
     }
 }

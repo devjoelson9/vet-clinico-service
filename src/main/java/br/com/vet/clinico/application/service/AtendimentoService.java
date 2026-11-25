@@ -41,14 +41,36 @@ public class AtendimentoService {
 
     @Transactional
     public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAutenticado usuario) {
-        Long veterinarioId = resolverVeterinarioId(usuario);
+        Long veterinarioEsperado = null;
+        if (usuario.isAdmin()) {
+            if (usuario.id() == null) {
+                throw new AccessDeniedException("Token sem identificação do usuário");
+            }
+        } else {
+            veterinarioEsperado = resolverVeterinarioId(usuario);
+        }
 
         if (repository.existsByAgendamentoIdAndDeletadoEmIsNull(request.agendamentoId())) {
             throw new ConflictException("Já existe um atendimento ativo para o agendamento informado");
         }
 
-        agendamentoGateways.forEach(gateway ->
-                gateway.validarInicioAtendimento(request.agendamentoId(), request.animalId(), veterinarioId));
+        /*
+         * O administrador não possui cadastro de veterinário: nesse caso o
+         * vínculo é obtido do próprio agendamento, garantindo que o atendimento
+         * seja atribuído ao veterinário correto.
+         */
+        Long veterinarioId = veterinarioEsperado;
+        for (AgendamentoGateway gateway : agendamentoGateways) {
+            Long veterinarioDoAgendamento = gateway.validarInicioAtendimento(
+                    request.agendamentoId(), request.animalId(), veterinarioEsperado);
+            if (veterinarioDoAgendamento != null) {
+                veterinarioId = veterinarioDoAgendamento;
+            }
+        }
+        if (veterinarioId == null) {
+            throw new BusinessException(
+                    "Não foi possível identificar o veterinário responsável pelo agendamento");
+        }
 
         Atendimento atendimento = mapper.toEntity(request, veterinarioId);
         valorAtendimentoService.aplicarServico(atendimento, request.servicoId());
@@ -209,16 +231,14 @@ public class AtendimentoService {
     }
 
     /**
-     * O JWT carrega o id do usuário, mas o agendamento e o atendimento usam o
-     * id do registro de veterinário. Resolvemos essa diferença no serviço de
-     * identidade. Administradores não possuem cadastro de veterinário.
+     * O JWT carrega o id do usuário, mas o atendimento usa o id do registro de
+     * veterinário. Resolvemos essa diferença no serviço de identidade. Para o
+     * administrador, o veterinário é obtido do próprio agendamento no início do
+     * atendimento.
      */
     private Long resolverVeterinarioId(UsuarioAutenticado usuario) {
         if (usuario.id() == null) {
             throw new AccessDeniedException("Token sem identificação do usuário");
-        }
-        if (usuario.isAdmin()) {
-            return usuario.id();
         }
         return identidadeClient.buscarVeterinarioId(usuario.id())
                 .orElseThrow(() -> new BusinessException(
