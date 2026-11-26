@@ -5,6 +5,8 @@ import br.com.vet.clinico.application.dto.request.IniciarAtendimentoRequest;
 import br.com.vet.clinico.application.dto.response.AtendimentoResponse;
 import br.com.vet.clinico.application.dto.response.HistoricoClinicoResponse;
 import br.com.vet.clinico.application.service.AtendimentoService;
+import br.com.vet.clinico.application.service.PrescricaoService;
+import br.com.vet.clinico.application.dto.response.PrescricaoResponse;
 import br.com.vet.clinico.domain.enums.StatusAtendimento;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import jakarta.validation.Valid;
@@ -14,6 +16,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -35,6 +39,7 @@ import java.time.LocalDate;
 public class AtendimentoController {
 
     private final AtendimentoService service;
+    private final PrescricaoService prescricaoService;
 
     @PostMapping("/iniciar")
     @PreAuthorize("hasAnyRole('VETERINARIO', 'ADMIN')")
@@ -67,6 +72,33 @@ public class AtendimentoController {
             @PageableDefault(size = 10, sort = "finalizadoEm", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         return ResponseEntity.ok(service.consultarHistorico(animalId, inicio, fim, pageable));
+    }
+
+    @GetMapping("/me/historico")
+    @PreAuthorize("hasRole('TUTOR')")
+    public ResponseEntity<Page<HistoricoClinicoResponse>> consultarMeuHistorico(
+            @RequestParam Long animalId,
+            @PageableDefault(size = 10, sort = "finalizadoEm", direction = Sort.Direction.DESC) Pageable pageable
+    ) {
+        return ResponseEntity.ok(service.consultarHistoricoTutor(animalId, pageable));
+    }
+
+    @GetMapping("/me/historico/{atendimentoId}/prescricao")
+    @PreAuthorize("hasRole('TUTOR')")
+    public ResponseEntity<PrescricaoResponse> consultarMinhaPrescricao(@PathVariable Long atendimentoId) {
+        return ResponseEntity.ok(prescricaoService.consultarParaTutor(atendimentoId));
+    }
+
+    @GetMapping("/me/historico/{atendimentoId}/prescricao/pdf")
+    @PreAuthorize("hasRole('TUTOR')")
+    public ResponseEntity<byte[]> baixarMinhaPrescricao(@PathVariable Long atendimentoId) {
+        byte[] pdf = prescricaoService.gerarPdfParaTutor(atendimentoId);
+        String nomeArquivo = "prescricao-" + atendimentoId + ".pdf";
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + nomeArquivo + "\"")
+                .body(pdf);
     }
 
     @GetMapping("/{id}")

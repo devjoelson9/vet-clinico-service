@@ -19,6 +19,7 @@ import br.com.vet.clinico.domain.repository.AtendimentoRepository;
 import br.com.vet.clinico.domain.repository.ItemPrescricaoRepository;
 import br.com.vet.clinico.domain.repository.MedicamentoRepository;
 import br.com.vet.clinico.domain.repository.PrescricaoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.pdf.PrescricaoPdfGenerator;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -61,6 +63,9 @@ class PrescricaoServiceTest {
     @Mock
     private PrescricaoPdfGenerator pdfGenerator;
 
+    @Mock
+    private IdentidadeClient identidadeClient;
+
     private PrescricaoService service;
 
     private final UsuarioAutenticado veterinario =
@@ -68,13 +73,17 @@ class PrescricaoServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(identidadeClient.buscarVeterinarioId(10L)).thenReturn(Optional.of(10L));
+        lenient().when(identidadeClient.buscarVeterinarioId(99L)).thenReturn(Optional.of(99L));
+
         service = new PrescricaoService(
                 prescricaoRepository,
                 itemPrescricaoRepository,
                 atendimentoRepository,
                 medicamentoRepository,
                 new PrescricaoMapper(),
-                pdfGenerator
+                pdfGenerator,
+                identidadeClient
         );
     }
 

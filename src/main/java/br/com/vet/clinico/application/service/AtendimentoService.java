@@ -13,6 +13,7 @@ import br.com.vet.clinico.application.mapper.AtendimentoMapper;
 import br.com.vet.clinico.domain.enums.StatusAtendimento;
 import br.com.vet.clinico.domain.model.Atendimento;
 import br.com.vet.clinico.domain.repository.AtendimentoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -26,6 +27,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
+
 @Service
 @RequiredArgsConstructor
 public class AtendimentoService {
@@ -34,41 +36,51 @@ public class AtendimentoService {
     private final AtendimentoMapper mapper;
     private final AtendimentoEventPublisher eventPublisher;
     private final List<AgendamentoGateway> agendamentoGateways;
+    private final IdentidadeClient identidadeClient;
     private final ValorAtendimentoService valorAtendimentoService;
     private final PagamentoService pagamentoService;
 
-   
-@Transactional
-public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAutenticado usuario) {
-    Long veterinarioId = usuario.id();
+    @Transactional
+    public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAutenticado usuario) {
+        Long veterinarioEsperado = null;
+        if (usuario.isAdmin()) {
+            if (usuario.id() == null) {
+                throw new AccessDeniedException("Token sem identificação do usuário");
+            }
+        } else {
+            veterinarioEsperado = resolverVeterinarioId(usuario);
+        }
 
-    if (veterinarioId == null) {
-        throw new AccessDeniedException("Token sem identificação do usuário");
+        if (repository.existsByAgendamentoIdAndDeletadoEmIsNull(request.agendamentoId())) {
+            throw new ConflictException("Já existe um atendimento ativo para o agendamento informado");
+        }
+
+        /*
+         * O administrador não possui cadastro de veterinário: nesse caso o
+         * vínculo é obtido do próprio agendamento, garantindo que o atendimento
+         * seja atribuído ao veterinário correto.
+         */
+        Long veterinarioId = veterinarioEsperado;
+        for (AgendamentoGateway gateway : agendamentoGateways) {
+            Long veterinarioDoAgendamento = gateway.validarInicioAtendimento(
+                    request.agendamentoId(), request.animalId(), veterinarioEsperado);
+            if (veterinarioDoAgendamento != null) {
+                veterinarioId = veterinarioDoAgendamento;
+            }
+        }
+        if (veterinarioId == null) {
+            throw new BusinessException(
+                    "Não foi possível identificar o veterinário responsável pelo agendamento");
+        }
+
+        Atendimento atendimento = mapper.toEntity(request, veterinarioId);
+        valorAtendimentoService.aplicarServico(atendimento, request.servicoId());
+        atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
+
+        Atendimento salvo = repository.save(atendimento);
+        eventPublisher.publicarIniciado(salvo);
+        return mapper.toResponse(salvo);
     }
-
-    if (repository.existsByAgendamentoIdAndDeletadoEmIsNull(request.agendamentoId())) {
-        throw new ConflictException("Já existe um atendimento ativo para o agendamento informado");
-    }
-
-    agendamentoGateways.forEach(gateway ->
-            gateway.validarInicioAtendimento(
-                    request.agendamentoId(),
-                    request.animalId(),
-                    veterinarioId
-            )
-    );
-
-    Atendimento atendimento = mapper.toEntity(request, veterinarioId);
-    valorAtendimentoService.aplicarServico(atendimento, request.servicoId());
-    atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
-
-    Atendimento salvo = repository.save(atendimento);
-
-    eventPublisher.publicarIniciado(salvo);
-
-    return mapper.toResponse(salvo);
-}
-
 
     @Transactional(readOnly = true)
     public Page<AtendimentoResponse> listar(
@@ -78,7 +90,6 @@ public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAut
             LocalDate inicio,
             LocalDate fim,
             Pageable pageable
-            
     ) {
         Specification<Atendimento> spec = (root, query, cb) -> cb.isNull(root.get("deletadoEm"));
 
@@ -141,6 +152,25 @@ public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAut
         return repository.findAll(spec, pageable).map(mapper::toHistoricoResponse);
     }
 
+    /**
+     * Histórico visível ao tutor. A posse do animal é validada no serviço de
+     * identidade antes de qualquer dado clínico ser retornado.
+     */
+    @Transactional(readOnly = true)
+    public Page<HistoricoClinicoResponse> consultarHistoricoTutor(Long animalId, Pageable pageable) {
+        if (animalId == null || animalId <= 0) {
+            throw new BusinessException("Animal inválido para consulta de histórico");
+        }
+
+        identidadeClient.validarAnimalDoTutor(animalId);
+
+        return repository.findByAnimalIdAndStatusAndDeletadoEmIsNull(
+                animalId,
+                StatusAtendimento.FINALIZADO,
+                pageable
+        ).map(mapper::toHistoricoResponse);
+    }
+
     @Transactional
     public AtendimentoResponse atualizar(Long id, AtualizarAtendimentoRequest request, UsuarioAutenticado usuario) {
         Atendimento atendimento = buscarAtendimento(id);
@@ -151,41 +181,39 @@ public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAut
         return mapper.toResponse(repository.save(atendimento));
     }
 
-   
-@Transactional
-public AtendimentoResponse finalizar(Long id, AtualizarAtendimentoRequest request, UsuarioAutenticado usuario) {
-    Atendimento atendimento = buscarAtendimento(id);
-    validarEmAndamento(atendimento);
-    validarResponsavel(atendimento, usuario);
+    @Transactional
+    public AtendimentoResponse finalizar(Long id, AtualizarAtendimentoRequest request, UsuarioAutenticado usuario) {
+        Atendimento atendimento = buscarAtendimento(id);
+        validarEmAndamento(atendimento);
+        validarResponsavel(atendimento, usuario);
 
-    if (request != null) {
-        mapper.updateEntity(atendimento, request);
+        if (request != null) {
+            mapper.updateEntity(atendimento, request);
+        }
+
+        validarCamposObrigatorios(atendimento);
+
+        atendimento.setStatus(StatusAtendimento.FINALIZADO);
+        atendimento.setFinalizadoEm(LocalDateTime.now());
+        atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
+
+        Atendimento salvo = repository.save(atendimento);
+
+        eventPublisher.publicarFinalizado(salvo);
+
+        if (salvo.getAgendamentoId() != null) {
+            agendamentoGateways.forEach(gateway ->
+                    gateway.alterarStatus(
+                            salvo.getAgendamentoId(),
+                            "ATENDIMENTO_REALIZADO"
+                    )
+            );
+        }
+
+        pagamentoService.concluirAgendamentoSeQuitado(salvo.getId());
+
+        return mapper.toResponse(salvo);
     }
-
-    validarCamposObrigatorios(atendimento);
-
-    atendimento.setStatus(StatusAtendimento.FINALIZADO);
-    atendimento.setFinalizadoEm(LocalDateTime.now());
-    atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
-
-    Atendimento salvo = repository.save(atendimento);
-
-    eventPublisher.publicarFinalizado(salvo);
-
-    if (salvo.getAgendamentoId() != null) {
-        agendamentoGateways.forEach(gateway ->
-                gateway.alterarStatus(
-                        salvo.getAgendamentoId(),
-                        "ATENDIMENTO_REALIZADO"
-                )
-        );
-    }
-
-    pagamentoService.concluirAgendamentoSeQuitado(salvo.getId());
-
-    return mapper.toResponse(salvo);
-}
-
 
     @Transactional
     public void cancelar(Long id, UsuarioAutenticado usuario) {
@@ -212,9 +240,24 @@ public AtendimentoResponse finalizar(Long id, AtualizarAtendimentoRequest reques
     }
 
     private void validarResponsavel(Atendimento atendimento, UsuarioAutenticado usuario) {
-        if (!usuario.isAdmin() && !Objects.equals(atendimento.getVeterinarioId(), usuario.id())) {
+        if (!usuario.isAdmin() && !Objects.equals(atendimento.getVeterinarioId(), resolverVeterinarioId(usuario))) {
             throw new AccessDeniedException("Apenas o veterinário responsável pode alterar este atendimento");
         }
+    }
+
+    /**
+     * O JWT carrega o id do usuário, mas o atendimento usa o id do registro de
+     * veterinário. Resolvemos essa diferença no serviço de identidade. Para o
+     * administrador, o veterinário é obtido do próprio agendamento no início do
+     * atendimento.
+     */
+    private Long resolverVeterinarioId(UsuarioAutenticado usuario) {
+        if (usuario.id() == null) {
+            throw new AccessDeniedException("Token sem identificação do usuário");
+        }
+        return identidadeClient.buscarVeterinarioId(usuario.id())
+                .orElseThrow(() -> new BusinessException(
+                        "Veterinário não encontrado para o usuário autenticado"));
     }
 
     private void validarCamposObrigatorios(Atendimento atendimento) {

@@ -16,6 +16,7 @@ import br.com.vet.clinico.domain.repository.AtendimentoRepository;
 import br.com.vet.clinico.domain.repository.CatalogoItemRepository;
 import br.com.vet.clinico.domain.repository.ItemAtendimentoRepository;
 import br.com.vet.clinico.domain.repository.MedicamentoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -56,6 +58,9 @@ class ItemAtendimentoServiceTest {
     @Mock
     private ValorAtendimentoService valorAtendimentoService;
 
+    @Mock
+    private IdentidadeClient identidadeClient;
+
     private ItemAtendimentoService service;
 
     private final UsuarioAutenticado veterinario =
@@ -63,13 +68,17 @@ class ItemAtendimentoServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(identidadeClient.buscarVeterinarioId(10L)).thenReturn(Optional.of(10L));
+        lenient().when(identidadeClient.buscarVeterinarioId(99L)).thenReturn(Optional.of(99L));
+
         service = new ItemAtendimentoService(
                 repository,
                 atendimentoRepository,
                 catalogoItemRepository,
                 medicamentoRepository,
                 new ItemAtendimentoMapper(),
-                valorAtendimentoService
+                valorAtendimentoService,
+                identidadeClient
         );
     }
 
@@ -172,6 +181,27 @@ class ItemAtendimentoServiceTest {
         );
 
         assertThat(response.nomeItem()).isEqualTo("Curativo");
+    }
+
+    @Test
+    void devePermitirItemQuandoIdDoUsuarioDifereDoIdDoVeterinario() {
+        Atendimento atendimento = atendimentoEmAndamento();
+        atendimento.setVeterinarioId(3L);
+
+        when(atendimentoRepository.findByIdAndDeletadoEmIsNull(1L)).thenReturn(Optional.of(atendimento));
+        when(identidadeClient.buscarVeterinarioId(10L)).thenReturn(Optional.of(3L));
+        when(catalogoItemRepository.findByIdAndDeletadoEmIsNull(5L))
+                .thenReturn(Optional.of(catalogoItemAtivo()));
+        when(repository.save(any(ItemAtendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ItemAtendimentoResponse response = service.registrar(
+                1L,
+                new RegistrarItemAtendimentoRequest(TipoItemAtendimento.CATALOGO_ITEM, 5L, BigDecimal.ONE),
+                veterinario
+        );
+
+        assertThat(response.nomeItem()).isEqualTo("Curativo");
+        verify(identidadeClient).buscarVeterinarioId(10L);
     }
 
     @Test

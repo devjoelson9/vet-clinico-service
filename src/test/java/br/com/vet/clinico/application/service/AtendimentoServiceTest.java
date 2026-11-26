@@ -12,6 +12,7 @@ import br.com.vet.clinico.application.mapper.AtendimentoMapper;
 import br.com.vet.clinico.domain.enums.StatusAtendimento;
 import br.com.vet.clinico.domain.model.Atendimento;
 import br.com.vet.clinico.domain.repository.AtendimentoRepository;
+import br.com.vet.clinico.infrastructure.integration.IdentidadeClient;
 import br.com.vet.clinico.infrastructure.security.UsuarioAutenticado;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,12 +39,13 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -65,20 +67,27 @@ class AtendimentoServiceTest {
     @Mock
     private ValorAtendimentoService valorAtendimentoService;
 
+    @Mock
+    private IdentidadeClient identidadeClient;
+
     private AtendimentoService service;
 
     private final UsuarioAutenticado veterinario = new UsuarioAutenticado(10L, "vet@teste.com", Set.of("VETERINARIO"));
 
     @BeforeEach
     void setUp() {
-    service = new AtendimentoService(
-        repository,
-        new AtendimentoMapper(),
-        eventPublisher,
-        List.of(),
-        valorAtendimentoService,
-        pagamentoService
-);
+        lenient().when(identidadeClient.buscarVeterinarioId(10L)).thenReturn(Optional.of(10L));
+        lenient().when(identidadeClient.buscarVeterinarioId(99L)).thenReturn(Optional.of(99L));
+
+        service = new AtendimentoService(
+                repository,
+                new AtendimentoMapper(),
+                eventPublisher,
+                List.of(),
+                identidadeClient,
+                valorAtendimentoService,
+                pagamentoService
+        );
     }
 
     @Test
@@ -113,34 +122,56 @@ class AtendimentoServiceTest {
     }
 
     @Test
-    
-void deveValidarAgendamentoAntesDeIniciar() {
+    void deveValidarAgendamentoAntesDeIniciar() {
+        AgendamentoGateway gateway = mock(AgendamentoGateway.class);
+        when(gateway.validarInicioAtendimento(1L, 2L, 10L)).thenReturn(10L);
 
-    AgendamentoGateway gateway = mock(AgendamentoGateway.class);
+        service = new AtendimentoService(
+                repository,
+                new AtendimentoMapper(),
+                eventPublisher,
+                List.of(gateway),
+                identidadeClient,
+                valorAtendimentoService,
+                pagamentoService
+        );
 
-    // Cria o serviço utilizando o gateway simulado.
-    service = new AtendimentoService(
-            repository,
-            new AtendimentoMapper(),
-            eventPublisher,
-            List.of(gateway),
-            valorAtendimentoService,
-            pagamentoService
-    );
+        when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
+        when(repository.save(any(Atendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-    when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L))
-            .thenReturn(false);
+        service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null, null), veterinario);
 
-    when(repository.save(any(Atendimento.class)))
-            .thenAnswer(invocation -> invocation.getArgument(0));
+        verify(gateway).validarInicioAtendimento(1L, 2L, 10L);
+    }
 
-    service.iniciar(
-            new IniciarAtendimentoRequest(1L, 2L, null, null),
-            veterinario
-    );
+    @Test
+    void deveIniciarAtendimentoComoAdminUsandoVeterinarioDoAgendamento() {
+        AgendamentoGateway gateway = mock(AgendamentoGateway.class);
+        when(gateway.validarInicioAtendimento(1L, 2L, null)).thenReturn(7L);
 
-    verify(gateway).validarInicioAtendimento(1L, 2L, 10L);
-}
+        service = new AtendimentoService(
+                repository,
+                new AtendimentoMapper(),
+                eventPublisher,
+                List.of(gateway),
+                identidadeClient,
+                valorAtendimentoService,
+                pagamentoService
+        );
+
+        when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
+        when(repository.save(any(Atendimento.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        UsuarioAutenticado admin = new UsuarioAutenticado(1L, "admin@teste.com", Set.of("ADMIN"));
+        AtendimentoResponse response = service.iniciar(
+                new IniciarAtendimentoRequest(1L, 2L, null, null), admin);
+
+        assertThat(response.veterinarioId()).isEqualTo(7L);
+        verify(gateway).validarInicioAtendimento(1L, 2L, null);
+        verify(identidadeClient, never()).buscarVeterinarioId(any());
+        verify(eventPublisher).publicarIniciado(any(Atendimento.class));
+    }
+
     @Test
     void deveRecusarInicioDuplicadoParaMesmoAgendamento() {
         when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(true);
@@ -275,6 +306,48 @@ void deveValidarAgendamentoAntesDeIniciar() {
                 .hasMessageContaining("Animal inválido");
 
         verify(repository, never()).findAll(any(Specification.class), any(Pageable.class));
+    }
+
+    @Test
+    void deveValidarVinculoDoAnimalComTutorAoConsultarHistoricoDoTutor() {
+        Pageable pageable = PageRequest.of(0, 10);
+        Atendimento atendimento = atendimentoFinalizado();
+        when(repository.findByAnimalIdAndStatusAndDeletadoEmIsNull(
+                2L, StatusAtendimento.FINALIZADO, pageable))
+                .thenReturn(new PageImpl<>(List.of(atendimento), pageable, 1));
+
+        Page<HistoricoClinicoResponse> pagina = service.consultarHistoricoTutor(2L, pageable);
+
+        verify(identidadeClient).validarAnimalDoTutor(2L);
+        assertThat(pagina.getTotalElements()).isEqualTo(1);
+        assertThat(pagina.getContent().get(0).animalId()).isEqualTo(2L);
+    }
+
+    @Test
+    void devePropagarAcessoNegadoQuandoAnimalNaoPertenceAoTutor() {
+        Pageable pageable = PageRequest.of(0, 10);
+        doThrow(new AccessDeniedException("Animal não pertence ao tutor autenticado"))
+                .when(identidadeClient).validarAnimalDoTutor(2L);
+
+        assertThatThrownBy(() -> service.consultarHistoricoTutor(2L, pageable))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("não pertence ao tutor");
+
+        verify(repository, never())
+                .findByAnimalIdAndStatusAndDeletadoEmIsNull(any(), any(), any());
+    }
+
+    @Test
+    void deveRecusarHistoricoDoTutorComAnimalIdInvalidoSemChamarIdentidade() {
+        Pageable pageable = PageRequest.of(0, 10);
+
+        assertThatThrownBy(() -> service.consultarHistoricoTutor(0L, pageable))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Animal inválido");
+
+        verify(identidadeClient, never()).validarAnimalDoTutor(any());
+        verify(repository, never())
+                .findByAnimalIdAndStatusAndDeletadoEmIsNull(any(), any(), any());
     }
 
     @Test
