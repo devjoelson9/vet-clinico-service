@@ -1,3 +1,4 @@
+
 package br.com.vet.clinico.application.gateway;
 
 public interface AgendamentoGateway {
@@ -12,4 +13,9 @@ public interface AgendamentoGateway {
      * @return id do veterinário responsável pelo agendamento
      */
     Long validarInicioAtendimento(Long agendamentoId, Long animalId, Long veterinarioEsperado);
+
+    /**
+     * Altera o status do agendamento vinculado ao atendimento.
+     */
+    void alterarStatus(Long agendamentoId, String novoStatus);
 }

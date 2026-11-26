@@ -6,11 +6,13 @@ import br.com.vet.clinico.application.gateway.AgendamentoGateway;
 import br.com.vet.clinico.infrastructure.security.AuthorizationHeaderProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 
+import java.util.Map;
 import java.util.Objects;
 
 @Component
@@ -47,6 +49,35 @@ public class AgendamentoClient implements AgendamentoGateway {
             throw new AccessDeniedException("O agendamento pertence a outro veterinário");
         }
         return agendamento.veterinarioId();
+    }
+
+    @Override
+    public void alterarStatus(Long agendamentoId, String novoStatus) {
+        try {
+            restClient.patch()
+                    .uri("/api/v1/agendamentos/{id}/status", agendamentoId)
+                    .headers(headers -> {
+                        String authorization = authorizationHeaderProvider.current();
+                        if (authorization != null) {
+                            headers.set(HttpHeaders.AUTHORIZATION, authorization);
+                        }
+                    })
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("status", novoStatus))
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (org.springframework.web.client.RestClientResponseException exception) {
+            int status = exception.getStatusCode().value();
+            if (status == 404) {
+                throw new ResourceNotFoundException("Agendamento não encontrado: " + agendamentoId);
+            }
+            if (status == 401 || status == 403) {
+                throw new AccessDeniedException("Acesso negado pelo serviço de agendamento");
+            }
+            throw new BusinessException("Falha ao atualizar o serviço de agendamento");
+        } catch (ResourceAccessException exception) {
+            throw new BusinessException("Serviço de agendamento indisponível");
+        }
     }
 
     private AgendamentoInfo buscar(Long agendamentoId) {

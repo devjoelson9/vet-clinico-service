@@ -39,8 +39,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -56,6 +54,9 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AtendimentoServiceTest {
+
+    @Mock
+    private PagamentoService pagamentoService;
 
     @Mock
     private AtendimentoRepository repository;
@@ -84,7 +85,8 @@ class AtendimentoServiceTest {
                 eventPublisher,
                 List.of(),
                 identidadeClient,
-                valorAtendimentoService
+                valorAtendimentoService,
+                pagamentoService
         );
     }
 
@@ -121,19 +123,17 @@ class AtendimentoServiceTest {
 
     @Test
     void deveValidarAgendamentoAntesDeIniciar() {
-        AtomicBoolean validado = new AtomicBoolean(false);
-        AgendamentoGateway gateway = (agendamentoId, animalId, veterinarioId) -> {
-            assertThat(veterinarioId).isEqualTo(10L);
-            validado.set(true);
-            return 10L;
-        };
+        AgendamentoGateway gateway = mock(AgendamentoGateway.class);
+        when(gateway.validarInicioAtendimento(1L, 2L, 10L)).thenReturn(10L);
+
         service = new AtendimentoService(
                 repository,
                 new AtendimentoMapper(),
                 eventPublisher,
                 List.of(gateway),
                 identidadeClient,
-                valorAtendimentoService
+                valorAtendimentoService,
+                pagamentoService
         );
 
         when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
@@ -141,23 +141,22 @@ class AtendimentoServiceTest {
 
         service.iniciar(new IniciarAtendimentoRequest(1L, 2L, null, null), veterinario);
 
-        assertThat(validado).isTrue();
+        verify(gateway).validarInicioAtendimento(1L, 2L, 10L);
     }
 
     @Test
     void deveIniciarAtendimentoComoAdminUsandoVeterinarioDoAgendamento() {
-        AtomicReference<Long> veterinarioEsperado = new AtomicReference<>(999L);
-        AgendamentoGateway gateway = (agendamentoId, animalId, veterinarioId) -> {
-            veterinarioEsperado.set(veterinarioId);
-            return 7L;
-        };
+        AgendamentoGateway gateway = mock(AgendamentoGateway.class);
+        when(gateway.validarInicioAtendimento(1L, 2L, null)).thenReturn(7L);
+
         service = new AtendimentoService(
                 repository,
                 new AtendimentoMapper(),
                 eventPublisher,
                 List.of(gateway),
                 identidadeClient,
-                valorAtendimentoService
+                valorAtendimentoService,
+                pagamentoService
         );
 
         when(repository.existsByAgendamentoIdAndDeletadoEmIsNull(1L)).thenReturn(false);
@@ -168,7 +167,7 @@ class AtendimentoServiceTest {
                 new IniciarAtendimentoRequest(1L, 2L, null, null), admin);
 
         assertThat(response.veterinarioId()).isEqualTo(7L);
-        assertThat(veterinarioEsperado.get()).isNull();
+        verify(gateway).validarInicioAtendimento(1L, 2L, null);
         verify(identidadeClient, never()).buscarVeterinarioId(any());
         verify(eventPublisher).publicarIniciado(any(Atendimento.class));
     }
@@ -204,6 +203,7 @@ class AtendimentoServiceTest {
         assertThat(response.valorTotal()).isEqualByComparingTo("175.00");
         verify(eventPublisher).publicarFinalizado(any(Atendimento.class));
         verify(valorAtendimentoService).calcularTotal(atendimento);
+        verify(pagamentoService).concluirAgendamentoSeQuitado(1L);
     }
 
     @Test

@@ -38,6 +38,7 @@ public class AtendimentoService {
     private final List<AgendamentoGateway> agendamentoGateways;
     private final IdentidadeClient identidadeClient;
     private final ValorAtendimentoService valorAtendimentoService;
+    private final PagamentoService pagamentoService;
 
     @Transactional
     public AtendimentoResponse iniciar(IniciarAtendimentoRequest request, UsuarioAutenticado usuario) {
@@ -189,6 +190,7 @@ public class AtendimentoService {
         if (request != null) {
             mapper.updateEntity(atendimento, request);
         }
+
         validarCamposObrigatorios(atendimento);
 
         atendimento.setStatus(StatusAtendimento.FINALIZADO);
@@ -196,7 +198,20 @@ public class AtendimentoService {
         atendimento.setValorTotal(valorAtendimentoService.calcularTotal(atendimento));
 
         Atendimento salvo = repository.save(atendimento);
+
         eventPublisher.publicarFinalizado(salvo);
+
+        if (salvo.getAgendamentoId() != null) {
+            agendamentoGateways.forEach(gateway ->
+                    gateway.alterarStatus(
+                            salvo.getAgendamentoId(),
+                            "ATENDIMENTO_REALIZADO"
+                    )
+            );
+        }
+
+        pagamentoService.concluirAgendamentoSeQuitado(salvo.getId());
+
         return mapper.toResponse(salvo);
     }
 
